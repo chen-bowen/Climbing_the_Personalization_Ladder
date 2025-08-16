@@ -1,0 +1,10 @@
+flask
+jinja2
+numpy
+pandas
+redis
+scikit-learn
+scipy
+pyarrow
+fastparquet
+orjson >= 3.10
