@@ -1,98 +1,142 @@
-import json
+# Import necessary libraries
+import time
 import pandas as pd
-
-from flask import current_app
-import redis
-from sklearn.feature_extraction.text import TfidfVectorizer
+import numpy as np
+from sklearn.feature_extraction.text import HashingVectorizer
 from sklearn.metrics.pairwise import linear_kernel
+from sklearn.preprocessing import normalize
+from scipy.sparse import vstack
+from tqdm import tqdm
+import redis
+import logging
+
+# Configure logger for information output
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Import context manager for timing code execution
+from contextlib import contextmanager
 
 
+# Define a timer context manager to measure execution time of code blocks
+@contextmanager
+def timer(name="Step"):
+    start = time.time()
+    yield
+    end = time.time()
+    logger.info(f"{name} took {end - start:.4f} seconds")
+
+
+# Define the RecommendationEngine class
 class RecommendationEngine:
-    """
-    A recommendation engine that uses TF-IDF and cosine similarity to find similar products.
-    """
+    SIMILARITY_KEY = "p:smlr:%s"  # Redis key pattern for storing similarities
 
-    SIMILARITY_KEY = "p:smlr:%s"
-
-    def __init__(self):
-        self._redis_client = None
-        self.tfidf_vectorizer = TfidfVectorizer(analyzer="word", ngram_range=(1, 3), min_df=0.0, stop_words="english")
-        self.data = None
-        self.data_indexed = None
-
-    @property
-    def redis_client(self):
-        """
-        Lazy initialization of the Redis client.
-        """
-        if self._redis_client is None:
-            self._redis_client = redis.StrictRedis.from_url(current_app.config["REDIS_URL"])
-        return self._redis_client
-
-    def _load_data(self, data_url):
-        """
-        Loads the product data from the specified URL or the default local file.
-        """
-        if data_url:
-            self.data = pd.read_parquet(data_url)
-        else:
-            self.data = pd.read_parquet("data/amazon_data.parquet")
-        self.data_indexed = self.data.set_index("id")
-
-    def train(self, data_url) -> None:
-        """
-        Trains the recommendation engine by building a similarity matrix and caching it in Redis.
-        """
-        self._load_data(data_url)
-        # Create a TF-IDF matrix from the product descriptions
-        self.data["combined_features"] = (
-            self.data["title"].fillna("")
-            + " "
-            + self.data["features"].fillna("")
-            + " "
-            + self.data["description"].fillna("")
-            + " "
-            + self.data["categories"].fillna("")
+    def __init__(self, batch_size=500):
+        # Initialize the vectorizer with specific parameters
+        self.vectorizer = HashingVectorizer(
+            n_features=2**16,  # Use a smaller number of features for memory efficiency
+            ngram_range=(1, 3),  # Consider unigrams, bigrams, and trigrams
+            analyzer="word",  # Analyze words
+            stop_words="english",  # Remove English stop words
+            alternate_sign=False,  # Do not use alternate sign
         )
-        tf_idf_matrix = self.tfidf_vectorizer.fit_transform(self.data["combined_features"])
+        self.batch_size = batch_size  # Set the batch size for processing
+        self.redis_client = redis.StrictRedis.from_url("redis://localhost:6379/0")  # Connect to Redis
+        self.data = None  # Placeholder for product data
+        self.ids = None  # Placeholder for product IDs
 
-        # Compute the cosine similarity between all products
-        cosine_sim = linear_kernel(tf_idf_matrix, tf_idf_matrix)
-
-        # Cache the top 100 most similar products for each product in Redis
-        for idx, row in self.data.iterrows():
-            similar_indices = cosine_sim[idx].argsort()[-101:-1]
-            similar_items = {int(self.data["id"][i]): float(cosine_sim[idx][i]) for i in similar_indices}
-            self.redis_client.zadd(self.SIMILARITY_KEY % row["id"], similar_items)
-
-    def _format_recommendation(self, item_id: int, score: float = None) -> dict:
+    def _load_data(self, data_path="data/amazon_data.parquet"):
         """
-        Formats a single recommendation item by fetching its data and truncating the description.
+        Load product data as pandas DataFrame.
         """
-        product_data = self.data_indexed.loc[int(item_id)].to_dict()
-        product = {"id": int(item_id)}
+        with timer("Loading data"):
+            self.data = pd.read_parquet(data_path)
+            self.ids = self.data["id"].tolist()  # Extract product IDs
+            logger.info(f"Loaded {len(self.data)} products.")
+
+    def _vectorize_data(self):
+        """
+        Combine text features and vectorize them using HashingVectorizer.
+        """
+        n = len(self.data)  # Number of products
+        vector_batches = []  # List to store vectorized batches
+
+        with timer("Vectorizing items"):
+            for start in tqdm(range(0, n, self.batch_size), desc="Vectorizing batches"):
+                batch = self.data.iloc[start : start + self.batch_size]  # Get a batch of data
+                combined_text = (
+                    batch["title"].fillna("")
+                    + " "
+                    + batch["features"].fillna("")
+                    + " "
+                    + batch["description"].fillna("")
+                    + " "
+                    + batch["categories"].fillna("")
+                )  # Combine text fields
+                vecs = self.vectorizer.transform(combined_text)  # Vectorize the combined text
+                vector_batches.append(vecs)  # Add the vectorized batch to the list
+
+        # Stack all batches into one sparse matrix
+        with timer("Stacking vectors"):
+            all_vectors = vstack(vector_batches)  # Stack vectors vertically
+        return all_vectors  # Return the stacked vectors
+
+    def _compute_and_cache_similarities(self, all_vectors):
+        """
+        Compute cosine similarities in batches and cache top 100 in Redis using sparse operations.
+        """
+        n = all_vectors.shape[0]  # Total number of vectors
+        batch_size = self.batch_size  # Batch size for processing
+
+        logger.info("Normalizing vectors...")
+        all_vectors_norm = normalize(all_vectors, axis=1)  # Normalize vectors row-wise
+
+        logger.info("Computing and caching similarities in batches...")
+        for start in tqdm(range(0, n, batch_size), desc="Processing batches"):
+            end = min(start + batch_size, n)  # Determine the end of the batch
+            batch_vecs = all_vectors_norm[start:end]  # Get a batch of normalized vectors
+
+            # Sparse dot product (batch_size x n)
+            similarities = batch_vecs.dot(all_vectors_norm.T)  # Compute similarities
+
+            for i, idx in enumerate(range(start, end)):
+                sim_scores = similarities[i].toarray().ravel()  # Convert similarities to a dense array
+                top_indices = np.argpartition(-sim_scores, 100)[:100]  # Get indices of top 100 scores
+                top_scores = sim_scores[top_indices]  # Get top 100 scores
+
+                # Store product IDs as strings to handle non-numeric IDs
+                # This avoids conversion errors for IDs like 'B0B39ZDT85'
+                top_items = {self.ids[j]: float(top_scores[k]) for k, j in enumerate(top_indices)}  # Map top scores to product IDs
+                self.redis_client.zadd(self.SIMILARITY_KEY % self.ids[idx], top_items)  # Cache in Redis
+
+    def train(self, data_path="data/amazon_data.parquet"):
+        # Load data and compute similarities
+        self._load_data(data_path)
+        all_vectors = self._vectorize_data()
+        self._compute_and_cache_similarities(all_vectors)
+
+    def _format_recommendation(self, item_id, score=None):
+        """
+        Return product details along with similarity score.
+        """
+        row = self.data[self.data["id"] == item_id].iloc[0].to_dict()  # Get product details as a dictionary
         if score is not None:
-            product["score"] = score
-        product.update(product_data)
+            row["score"] = score  # Add similarity score if provided
+        return row  # Return the product details
 
-        if "description" in product and len(product["description"]) > 100:
-            product["description"] = product["description"][:100] + "..."
-        return product
-
-    def predict(self, product_id: int, n: int = 10) -> dict:
+    def predict(self, item_id, num_recommendations=10):
         """
-        Returns the top N recommendations for a given product.
+        Return top-N recommended items for a given product ID.
         """
-        if self.data is None:
-            self._load_data(None)
-        # Fetch the top N similar items from Redis
-        similar_items = self.redis_client.zrevrange(self.SIMILARITY_KEY % product_id, 0, n - 1, withscores=True)
-
-        query = self._format_recommendation(product_id)
-        # Format the recommendations
-        recommendations = [self._format_recommendation(int(item_id), score) for item_id, score in similar_items]
-
-        return {"query": query, "recommendations": recommendations}
+        # Retrieve top-N recommended items from Redis
+        recommended_items = self.redis_client.zrevrange(self.SIMILARITY_KEY % item_id, 0, num_recommendations - 1, withscores=True)
+        # Format recommendations with product details and scores
+        recommendations = [self._format_recommendation(int(rid), score) for rid, score in recommended_items]
+        query_item = self._format_recommendation(item_id)  # Get details of the query item
+        return {"query": query_item, "recommendations": recommendations}  # Return query and recommendations
 
 
-recommendation_engine = RecommendationEngine()
+# Main execution block
+if __name__ == "__main__":
+    engine = RecommendationEngine(batch_size=500)  # Create an instance of the recommendation engine
+    engine.train("data/amazon_data.parquet")  # Train the engine with data
