@@ -3,7 +3,9 @@ import pandas as pd
 import logging
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 
 def create_data_pipeline(input_path, output_path):
@@ -16,7 +18,9 @@ def create_data_pipeline(input_path, output_path):
         output_path (str): The path to the output parquet file.
     """
     # Log the start of the data pipeline with input and output paths
-    logging.info(f"Starting data pipeline. Input: '{input_path}', Output: '{output_path}'")
+    logging.info(
+        f"Starting data pipeline. Input: '{input_path}', Output: '{output_path}'"
+    )
 
     data = []  # List to hold processed records
     with open(input_path, "rb") as f:
@@ -55,4 +59,6 @@ def create_data_pipeline(input_path, output_path):
 
 
 if __name__ == "__main__":
-    create_data_pipeline("data/meta_Sports_and_Outdoors.jsonl", "data/amazon_data.parquet")
+    create_data_pipeline(
+        "data/meta_Sports_and_Outdoors.jsonl", "data/amazon_data.parquet"
+    )

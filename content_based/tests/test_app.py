@@ -31,7 +31,9 @@ class ContentEngineTestCase(unittest.TestCase):
             ],
         }
         self.df = pd.DataFrame(self.sample_data)
-        self.sample_data_path = os.path.join(os.path.dirname(__file__), "sample_data.csv")
+        self.sample_data_path = os.path.join(
+            os.path.dirname(__file__), "sample_data.csv"
+        )
         self.df.to_csv(self.sample_data_path, index=False)
 
     def tearDown(self):
