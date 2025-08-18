@@ -104,34 +104,83 @@ The recommendation engine is built around the concept of finding similar items b
     export REDIS_URL="redis://localhost:6379"
     ```
 
-### Running the Application
+### Example Usage
 
-1.  Start the Flask development server:
+#### Training the Model
 
-    ```bash
-    python app.py
-    ```
+To train the recommendation model with the default dataset:
 
-2.  Train the model by sending a POST request to the `/train` endpoint:
+```python
+from recommend import RecommendationEngine
 
-    ```bash
-    curl -X POST \
-      http://127.0.0.1:5000/train \
-      -H 'Content-Type: application/json' \
-      -H 'X-API-TOKEN: your_api_token' \
-      -d '{}'
-    ```
+# Create an instance of the recommendation engine
+recommendation_engine = RecommendationEngine(batch_size=500)
 
-    This will train the model with the default `data/data.csv` file.
+# Train the model with the default data path
+recommendation_engine.train("data/amazon_data.parquet")
+```
 
-3.  Get recommendations by sending a POST request to the `/predict` endpoint:
-    ```bash
-    curl -X POST \
-      http://127.0.0.1:5000/predict \
-      -H 'Content-Type: application/json' \
-      -H 'X-API-TOKEN: your_api_token' \
-      -d '{"item": "1"}'
-    ```
+#### Getting Recommendations
+
+To get recommendations for a specific product ID:
+
+```python
+# Get top 10 recommendations for a given product ID
+recommendations = recommendation_engine.predict("B073CRCDFS", num_recommendations=10)
+
+# Print the recommendations
+print(recommendations)
+```
+
+#### Running the Application
+
+To run the application and make predictions via the API:
+
+1. **Start the Flask server**:
+
+   ```bash
+   python app.py
+   ```
+
+2. **Make a prediction request**:
+
+   ```bash
+   curl -X POST \
+     http://127.0.0.1:5000/predict \
+     -H 'Content-Type: application/json' \
+     -H 'X-API-TOKEN: your_api_token' \
+     -d '{"item": "B073CRCDFS", "num": 10}'
+   ```
+
+result:
+
+```
+{
+  "query": {
+    "description": "Product Description Amazon Basics Battle Exercise Training Rope - 30/40/50 Foot Lengths, 1.5/2 Inch Widths From the Manufacturer Amazon Basics",
+    "features": "Color Optional: Black Size Optional (1.5\"/2\" Diam.): 30Ft / 40Ft / 50Ft Material: 100% Poly Dacron, Wear Resistant and Durable, 3-Strand Twisted Polydactyl Strong Construction Orange / Yellow Tracking Line, Convenient for Maintenance, 600D Oxford Waterproof Sleeve Protect the Rope from Friction and Fray Heat Shrink Caps on the ends, Heavy and Apprised High Tensile Strength The battle rope is produced under clockwise twist, do not swing counterclockwise",
+    "id": "B073CRCDFS",
+    "score": null,
+    "title": "Amazon Basics Battle Exercise Training Rope - 30/40/50 Foot Lengths, 1.5/2 Inch Widths"
+  },
+  "recommendations": [
+    {
+      "description": "Product Description Amazon Basics Battle Exercise Training Rope - 30/40/50 Foot Lengths, 1.5/2 Inch Widths From the Manufacturer Amazon Basics",
+      "features": "Color Optional: Black Size Optional (1.5\"/2\" Diam.): 30Ft / 40Ft / 50Ft Material: 100% Poly Dacron, Wear Resistant and Durable, 3-Strand Twisted Polydactyl Strong Construction Orange / Yellow Tracking Line, Convenient for Maintenance, 600D Oxford Waterproof Sleeve Protect the Rope from Friction and Fray Heat Shrink Caps on the ends, Heavy and Apprised High Tensile Strength The battle rope is produced under clockwise twist, do not swing counterclockwise",
+      "id": "B073CRCDFS",
+      "score": 0.9999999999999996,
+      "title": "Amazon Basics Battle Exercise Training Rope - 30/40/50 Foot Lengths, 1.5/2 Inch Widths"
+    },
+    {
+      "description": "OursGym Training Rope Holder conveniently stores more than 50' of rope. It helps store your battle rope in an easy and convenient way so that your rope doesn\u2019t gather dust and get trampled on. WHY CONSIDER OWNING OURSGYM BATTLE ROPE HOLDER? -- Made from high quality steel alloy with extra durable welded joint. -- Round edged hanging bar so that it does not cut or stress battle rope strands. -- Angled stopper helps in easy mounting and dismounting heavy battle ropes. -- Painted with black anti corrosive paint for protection against rust. -- Comes with four holes for fixing screws for a perfect and secured attachment. --- Backed by OursGym, 100% SATISFACTION GUARANTEED, Click \"Add to Cart\" button and keep your battle ropes safe while saving floor space !!!",
+      "features": "USES: This Rope Holder conveniently stores more than 50' of rope, Hardware included. BENEFITS: Perfect battle rope storage, keep your training ropes neat and organized.\u00a0 Once done with your workout, simply coil the battle rope on the storage hook to keep it out of the way and perfectly stored for use again. QUALITY & BUILT STURDILY: The incredibly sturdy steel build of the wall storage hook allows you to develop your core strength to the max without worrying whether it can fully support your weight. Enjoy peace of mind and highly productive workout sessions with the OursGym Battle Rope Anchor. DIMENSIONS: 8\" high x 2\" wide x 1/9\" thick x 14\" long holder piece. MONEY BACK GUARANTEE: Not satisfied with your product? Enjoy a 30-day money back guarantee and free replacements for every defective order, backed by OursGym. Click \u201cBuy Now\u201d !!!",
+      "id": "B07PD2N2L9",
+      "score": 0.23737092151811173,
+      "title": "OursGym Training Rope Holder, Exercise Rope Holder, Battle Rope Storage Gym Storage Hook"
+    }
+  ]
+}
+```
 
 ### Running Tests
 

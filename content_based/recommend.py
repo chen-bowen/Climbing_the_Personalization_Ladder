@@ -1,4 +1,5 @@
 # Import necessary libraries
+from collections import OrderedDict
 import time
 import pandas as pd
 import numpy as np
@@ -49,8 +50,12 @@ class RecommendationEngine:
         """
         Load product data as pandas DataFrame.
         """
+        # Set default data path if None is provided
+        if data_path is None:
+            data_path = "data/amazon_data.parquet"
+
         with timer("Loading data"):
-            self.data = pd.read_parquet(data_path)
+            self.data = pd.read_parquet(data_path)[:100000]
             self.ids = self.data["id"].tolist()  # Extract product IDs
             logger.info(f"Loaded {len(self.data)} products.")
 
@@ -119,24 +124,47 @@ class RecommendationEngine:
         """
         Return product details along with similarity score.
         """
+        # Check if the item_id exists in the data
+        if self.data[self.data["id"] == item_id].empty:
+            logger.warning(f"Item ID {item_id} not found in data.")
+            return {"id": item_id, "error": "Item not found"}
+
         row = self.data[self.data["id"] == item_id].iloc[0].to_dict()  # Get product details as a dictionary
-        if score is not None:
-            row["score"] = score  # Add similarity score if provided
-        return row  # Return the product details
+
+        # Format the recommendation to include only title, description, and features
+        return OrderedDict(
+            {
+                "title": row.get("title"),
+                "description": row.get("description"),
+                "features": row.get("features"),
+                "id": item_id,  # Include the ID for reference
+                "score": score,  # Include the score if provided
+            }
+        )
 
     def predict(self, item_id, num_recommendations=10):
         """
         Return top-N recommended items for a given product ID.
         """
         # Retrieve top-N recommended items from Redis
-        recommended_items = self.redis_client.zrevrange(self.SIMILARITY_KEY % item_id, 0, num_recommendations - 1, withscores=True)
+        recommended_items = self.redis_client.zrevrange(self.SIMILARITY_KEY % item_id, 1, num_recommendations, withscores=True)
+
+        # Exclude the item itself from the recommendations
+        # recommended_items = [item for item in recommended_items if item[0].decode("utf-8") != item_id]
+
         # Format recommendations with product details and scores
-        recommendations = [self._format_recommendation(int(rid), score) for rid, score in recommended_items]
+        recommendations = [self._format_recommendation(rid.decode("utf-8"), score) for rid, score in recommended_items]
+
+        # Log the formatted recommendations
+        logger.info(f"Formatted recommendations: {recommendations}")
         query_item = self._format_recommendation(item_id)  # Get details of the query item
         return {"query": query_item, "recommendations": recommendations}  # Return query and recommendations
 
 
+recommendation_engine = RecommendationEngine(batch_size=500)  # Create an instance of the recommendation engine
+
+
 # Main execution block
 if __name__ == "__main__":
-    engine = RecommendationEngine(batch_size=500)  # Create an instance of the recommendation engine
-    engine.train("data/amazon_data.parquet")  # Train the engine with data
+    recommendation_engine.train("data/amazon_data.parquet")  # Train the engine with data
+    recommendation_engine.predict("B073CRCDFS")
